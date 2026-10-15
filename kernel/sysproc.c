@@ -119,3 +119,34 @@ sys_wait2(void)
   argaddr(1, &r);
   return wait2(p, r);
 }
+
+uint64
+sys_getprocs(void)
+{
+  uint64 addr;
+  argaddr(0, &addr);
+  return getprocs(addr);
+}
+
+uint64
+sys_getpriority(void)
+{
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  int pr = p->priority;
+  release(&p->lock);
+  return pr;
+}
+
+uint64
+sys_setpriority(void)
+{
+  int prio;
+  argint(0, &prio);
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  int old = p->priority;
+  p->priority = prio;
+  release(&p->lock);
+  return old;
+}

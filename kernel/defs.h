@@ -187,3 +187,7 @@ void            virtio_disk_intr(void);
 
 
 int wait2(uint64,uint64);
+
+int getprocs(uint64);
+int getpriority(int);
+int setpriority(int, int);

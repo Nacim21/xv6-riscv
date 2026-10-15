@@ -124,6 +124,7 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  p->priority = 0;
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -228,7 +229,7 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
-
+  p->readytime = ticks;
   release(&p->lock);
 }
 
@@ -269,6 +270,7 @@ kfork(void)
     return -1;
   }
 
+
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
     freeproc(np);
@@ -276,6 +278,7 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->priority = p->priority;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -301,6 +304,7 @@ kfork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  p->readytime = ticks;
   release(&np->lock);
 
   return pid;
@@ -427,6 +431,18 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+static int
+effpriority(struct proc *p)
+{
+#if SCHEDPOLICY == SCHED_AGING
+  int e = p->priority + (int)((ticks - p->readytime) / AGINGTICKS);
+  return e > MAXEFFPRIORITY ? MAXEFFPRIORITY : e;
+#else
+  return p->priority;
+#endif
+}
+
 void
 scheduler(void)
 {
@@ -444,6 +460,38 @@ scheduler(void)
     intr_off();
 
     int found = 0;
+ #if SCHEDPOLICY == SCHED_PRIORITY || SCHEDPOLICY == SCHED_AGING
+    struct proc *best = 0;
+    int bestprio = 0;
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE) {
+        int e = effpriority(p);
+        if (best == 0 || e > bestprio ||
+            (e == bestprio && p->readytime < best->readytime)) {
+          best = p;
+          bestprio = e;
+        }
+      }
+      release(&p->lock);
+    }
+
+    if (best) {
+      acquire(&best->lock);
+      if (best->state == RUNNABLE) {
+        best->state = RUNNING;
+        c->proc = best;
+        swtch(&c->context, &best->context);
+
+        // Don't re-enable interrupts on release.
+        mycpu()->intena = 0;
+
+        c->proc = 0;
+        found = 1;
+      }
+      release(&best->lock);
+    }
+#else
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
@@ -464,6 +512,7 @@ scheduler(void)
       }
       release(&p->lock);
     }
+#endif
     if (found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -505,6 +554,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  p->readytime = ticks;
   sched();
   release(&p->lock);
 }
@@ -591,6 +641,7 @@ wakeup(void *chan)
       // go to sleep, also set it back to RUNNING.
       if (p->state == SLEEPING) {
         p->state = RUNNABLE;
+        p->readytime = ticks;
       }
     }
     release(&p->lock);
@@ -612,6 +663,7 @@ kkill(int pid)
       if (p->state == SLEEPING) {
         // Wake process from sleep().
         p->state = RUNNABLE;
+	p->readytime = ticks;
       }
       release(&p->lock);
       return 0;
@@ -758,4 +810,70 @@ wait2(uint64 addr, uint64 raddr)
     sleep();
     acquire(&wait_lock);
   }
+}
+
+int
+getprocs(uint64 addr)
+{
+  struct proc *p;
+  struct pstat ps;
+  int count = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&wait_lock);   // protects p->parent
+    acquire(&p->lock);
+    if(p->state == UNUSED){
+      release(&p->lock);
+      release(&wait_lock);
+      continue;
+    }
+    ps.pid   = p->pid;
+    ps.state = p->state;
+    ps.size  = p->sz;
+    ps.ppid  = p->parent ? p->parent->pid : 0;
+    ps.priority = p->priority;
+    ps.readytime = p->readytime;
+    safestrcpy(ps.name, p->name, sizeof(ps.name));
+    release(&p->lock);
+    release(&wait_lock);
+
+    if(copyout(myproc()->pagetable, myproc()->sz, addr + count * sizeof(ps),
+               (char *)&ps, sizeof(ps)) < 0)
+      return -1;
+    count++;
+  }
+  return count;
+}
+
+int
+getpriority(int pid)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pid == pid){
+      int pr = p->priority;
+      release(&p->lock);
+      return pr;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+setpriority(int pid, int priority)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pid == pid){
+      int old = p->priority;
+      p->priority = priority;
+      release(&p->lock);
+      return old;
+    }
+    release(&p->lock);
+  }
+  return -1;
 }

@@ -1,4 +1,5 @@
 #include "kernel/types.h"
+enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 #include "user/user.h"
 #include "kernel/pstat.h"
 #include "kernel/stat.h"

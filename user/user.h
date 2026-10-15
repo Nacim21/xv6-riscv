@@ -51,3 +51,8 @@ void free(void *);
 
 struct rusage;
 int wait2(int*,struct rusage*);
+struct pstat;
+
+int getprocs(struct pstat*);
+int getpriority(void);
+int setpriority(int);

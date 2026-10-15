@@ -1,0 +1,1 @@
+I learned how the kernel passes process info to user programs with copyout(), and that storing readytime as a timestamp is way simpler than updating a counter every tick, since you just subtract when you need the age. The priority scheduler showed me how low-priority processes can starve, and aging fixed that.
